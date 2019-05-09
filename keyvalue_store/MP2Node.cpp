@@ -123,10 +123,9 @@ void MP2Node::clientCreate(string key, string value) {
 		// send message
 		Message m0(transID, memberNode->addr, CREATE, key, value, PRIMARY);
 		Message m1(transID, memberNode->addr, CREATE, key, value, SECONDARY);
-		Message m2(transID, memberNode->addr, CREATE, key, value, TERTIARY);
 		emulNet->ENsend(&memberNode->addr, &replicas.at(0).nodeAddress, m0.toString());
 		emulNet->ENsend(&memberNode->addr, &replicas.at(1).nodeAddress, m1.toString());
-		emulNet->ENsend(&memberNode->addr, &replicas.at(2).nodeAddress, m2.toString());
+		emulNet->ENsend(&memberNode->addr, &replicas.at(2).nodeAddress, m1.toString());
 		opSet.emplace(transID, m0);
 	}
 }
@@ -181,10 +180,9 @@ void MP2Node::clientUpdate(string key, string value){
 		// send message
 		Message m0(transID, memberNode->addr, UPDATE, key, value, PRIMARY);
 		Message m1(transID, memberNode->addr, UPDATE, key, value, SECONDARY);
-		Message m2(transID, memberNode->addr, UPDATE, key, value, TERTIARY);
 		emulNet->ENsend(&memberNode->addr, &replicas.at(0).nodeAddress, m0.toString());
 		emulNet->ENsend(&memberNode->addr, &replicas.at(1).nodeAddress, m1.toString());
-		emulNet->ENsend(&memberNode->addr, &replicas.at(2).nodeAddress, m2.toString());
+		emulNet->ENsend(&memberNode->addr, &replicas.at(2).nodeAddress, m1.toString());
 		opSet.emplace(transID, m0);
 	}
 }
@@ -326,6 +324,9 @@ void MP2Node::checkMessages() {
 		{
 		case CREATE:
 			success = createKeyValue(m.key, m.value, m.replica);
+			if (m.replica == TERTIARY) {
+				//break; // replica of stabilization protocol, just skip
+			}
 			if (success) {
 				log->logCreateSuccess(&(memberNode->addr), false, m.transID, m.key, m.value);
 			} else {
@@ -534,5 +535,43 @@ void MP2Node::stabilizationProtocol() {
 	/*
 	 * Implement this
 	 */
-
+	// at least 3 nodes
+	if (ring.size() < 3) {
+		return;
+	}
+	Node mynode(memberNode->addr);
+	int mypos = 0;
+	int mycode, prevcode;
+	vector<Node> prevs;
+	vector<Node> afters;
+	for (int i=0; i<ring.size(); i++){
+		Node node = ring.at(i);
+		if (node.getHashCode() == mynode.getHashCode()) {
+			mypos = i;
+			break;
+		}
+	}
+	prevs.emplace_back(ring.at((mypos-2)%ring.size()));
+	prevs.emplace_back(ring.at((mypos-1)%ring.size()));
+	afters.emplace_back(ring.at((mypos+1)%ring.size()));
+	afters.emplace_back(ring.at((mypos+2)%ring.size()));
+	if (!hasMyReplicas.empty() && !haveReplicasOf.empty()) {
+		if (prevs.at(1).getHashCode() != haveReplicasOf.at(1).getHashCode()
+		|| afters.at(0).getHashCode() != hasMyReplicas.at(0).getHashCode()
+		|| afters.at(1).getHashCode() != hasMyReplicas.at(1).getHashCode()) {
+			// value range is changed or backup replica node changed, should replica to afters
+			for (map<string, string>::const_iterator it = ht->hashTable.cbegin();
+				it != ht->hashTable.cend(); ++it) {
+				size_t code = hashFunction(it->first);
+				if ((prevcode < mycode && prevcode < code && code <= mycode)
+					|| (prevcode > mycode && (prevcode < code || code <= mycode))) {
+					Message m(0, memberNode->addr, CREATE, it->first, it->second, TERTIARY);
+					emulNet->ENsend(&memberNode->addr, &afters.at(0).nodeAddress, m.toString());
+					emulNet->ENsend(&memberNode->addr, &afters.at(1).nodeAddress, m.toString());
+				}
+			}
+		}
+	}
+	hasMyReplicas = afters;
+	haveReplicasOf = prevs;
 }
