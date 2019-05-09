@@ -4,6 +4,7 @@
  * DESCRIPTION: MP2Node class definition
  **********************************/
 #include "MP2Node.h"
+#include "Message.h"
 
 /**
  * constructor
@@ -57,6 +58,8 @@ void MP2Node::updateRing() {
 	 * Step 3: Run the stabilization protocol IF REQUIRED
 	 */
 	// Run stabilization protocol if the hash table size is greater than zero and if there has been a changed in the ring
+	ring = curMemList;
+	stabilizationProtocol();
 }
 
 /**
@@ -111,6 +114,21 @@ void MP2Node::clientCreate(string key, string value) {
 	/*
 	 * Implement this
 	 */
+	vector<Node> replicas = findNodes(key);
+	int transID = ++g_transID;
+	if (replicas.size() == 0) {
+		log->logCreateFail(&(memberNode->addr), true, transID, key, value);
+		return;
+	} else {
+		// send message
+		Message m0(transID, memberNode->addr, CREATE, key, value, PRIMARY);
+		Message m1(transID, memberNode->addr, CREATE, key, value, SECONDARY);
+		Message m2(transID, memberNode->addr, CREATE, key, value, TERTIARY);
+		emulNet->ENsend(&memberNode->addr, &replicas.at(0).nodeAddress, m0.toString());
+		emulNet->ENsend(&memberNode->addr, &replicas.at(1).nodeAddress, m1.toString());
+		emulNet->ENsend(&memberNode->addr, &replicas.at(2).nodeAddress, m2.toString());
+		opSet.emplace(transID, m0);
+	}
 }
 
 /**
@@ -126,6 +144,19 @@ void MP2Node::clientRead(string key){
 	/*
 	 * Implement this
 	 */
+	vector<Node> replicas = findNodes(key);
+	int transID = ++g_transID;
+	if (replicas.size() == 0) {
+		log->logReadFail(&(memberNode->addr), true, transID, key);
+		return;
+	} else {
+		// send message
+		Message m(transID, memberNode->addr, READ, key);
+		emulNet->ENsend(&memberNode->addr, &replicas.at(0).nodeAddress, m.toString());
+		emulNet->ENsend(&memberNode->addr, &replicas.at(1).nodeAddress, m.toString());
+		emulNet->ENsend(&memberNode->addr, &replicas.at(2).nodeAddress, m.toString());
+		opSet.emplace(transID, m);
+	}
 }
 
 /**
@@ -141,6 +172,21 @@ void MP2Node::clientUpdate(string key, string value){
 	/*
 	 * Implement this
 	 */
+	vector<Node> replicas = findNodes(key);
+	int transID = ++g_transID;
+	if (replicas.size() == 0) {
+		log->logUpdateFail(&(memberNode->addr), true, transID, key, value);
+		return;
+	} else {
+		// send message
+		Message m0(transID, memberNode->addr, UPDATE, key, value, PRIMARY);
+		Message m1(transID, memberNode->addr, UPDATE, key, value, SECONDARY);
+		Message m2(transID, memberNode->addr, UPDATE, key, value, TERTIARY);
+		emulNet->ENsend(&memberNode->addr, &replicas.at(0).nodeAddress, m0.toString());
+		emulNet->ENsend(&memberNode->addr, &replicas.at(1).nodeAddress, m1.toString());
+		emulNet->ENsend(&memberNode->addr, &replicas.at(2).nodeAddress, m2.toString());
+		opSet.emplace(transID, m0);
+	}
 }
 
 /**
@@ -156,6 +202,19 @@ void MP2Node::clientDelete(string key){
 	/*
 	 * Implement this
 	 */
+	vector<Node> replicas = findNodes(key);
+	int transID = ++g_transID;
+	if (replicas.size() == 0) {
+		log->logDeleteFail(&(memberNode->addr), true, transID, key);
+		return;
+	} else {
+		// send message
+		Message m(transID, memberNode->addr, DELETE, key);
+		emulNet->ENsend(&memberNode->addr, &replicas.at(0).nodeAddress, m.toString());
+		emulNet->ENsend(&memberNode->addr, &replicas.at(1).nodeAddress, m.toString());
+		emulNet->ENsend(&memberNode->addr, &replicas.at(2).nodeAddress, m.toString());
+		opSet.emplace(transID, m);
+	}
 }
 
 /**
@@ -171,6 +230,7 @@ bool MP2Node::createKeyValue(string key, string value, ReplicaType replica) {
 	 * Implement this
 	 */
 	// Insert key, value, replicaType into the hash table
+	return ht->create(key, value);
 }
 
 /**
@@ -186,6 +246,7 @@ string MP2Node::readKey(string key) {
 	 * Implement this
 	 */
 	// Read key from local hash table and return value
+	return ht->read(key);
 }
 
 /**
@@ -201,6 +262,7 @@ bool MP2Node::updateKeyValue(string key, string value, ReplicaType replica) {
 	 * Implement this
 	 */
 	// Update key in local hash table and return true or false
+	return ht->update(key, value);
 }
 
 /**
@@ -216,6 +278,7 @@ bool MP2Node::deletekey(string key) {
 	 * Implement this
 	 */
 	// Delete the key from the local hash table
+	return ht->deleteKey(key);
 }
 
 /**
@@ -232,6 +295,12 @@ void MP2Node::checkMessages() {
 	 */
 	char * data;
 	int size;
+	map<int, int> transSet;
+	map<int, int>::iterator iter;
+	string val;
+	bool success;
+	int quorum;
+	Message * reply;
 
 	/*
 	 * Declare your local variables here
@@ -251,13 +320,150 @@ void MP2Node::checkMessages() {
 		/*
 		 * Handle the message types here
 		 */
+		Message m(message);
+		reply = NULL;
+		switch (m.type)
+		{
+		case CREATE:
+			success = createKeyValue(m.key, m.value, m.replica);
+			if (success) {
+				log->logCreateSuccess(&(memberNode->addr), false, m.transID, m.key, m.value);
+			} else {
+				log->logCreateFail(&(memberNode->addr), false, m.transID, m.key, m.value);
+			}
+			reply = new Message(m.transID, memberNode->addr, REPLY, success);
+			break;
 
+		case READ:
+			val = readKey(m.key);
+			if (val.size() > 0) {
+				log->logReadSuccess(&(memberNode->addr), false, m.transID, m.key, val);
+			} else {
+				log->logReadFail(&(memberNode->addr), false, m.transID, m.key);
+			}
+			reply = new Message(m.transID, memberNode->addr, val);
+			break;
+
+		case UPDATE:
+			success = updateKeyValue(m.key, m.value, m.replica);
+			if (success) {
+				log->logUpdateSuccess(&(memberNode->addr), false, m.transID, m.key, m.value);
+			} else {
+				log->logUpdateFail(&(memberNode->addr), false, m.transID, m.key, m.value);
+			}
+			reply = new Message(m.transID, memberNode->addr, REPLY, success);
+			break;
+
+		case DELETE:
+			success = deletekey(m.key);
+			if (success) {
+				log->logDeleteSuccess(&(memberNode->addr), false, m.transID, m.key);
+			} else {
+				log->logDeleteFail(&(memberNode->addr), false, m.transID, m.key);
+			}
+			reply = new Message(m.transID, memberNode->addr, REPLY, success);
+			break;
+		
+		case REPLY:
+			iter = transSet.find(m.transID);
+			if (iter != transSet.end()) {
+				quorum = iter->second;
+			} else {
+				quorum = 0;
+			}
+			if (m.success) {
+				quorum = quorum + 1;
+			}
+			transSet[m.transID] = quorum;
+			break;
+
+		case READREPLY:
+			iter = transSet.find(m.transID);
+			if (iter != transSet.end()) {
+				quorum = iter->second;
+			} else {
+				quorum = 0;
+			}
+			if (m.value.size() > 0) {
+				quorum = quorum + 1; //update
+				if (quorum == 2) {
+					map<int, Message>::iterator search = opSet.find(iter->first);
+					if (search != opSet.end()) {
+						log->logReadSuccess(&memberNode->addr, true, m.transID, search->second.key, m.value);
+					}
+				}
+			}
+			transSet[m.transID] = quorum;
+			break;
+
+		default:
+			break;
+		}
+		if (reply != NULL) {
+			// just send reply
+			emulNet->ENsend(&memberNode->addr, &m.fromAddr, reply->toString());
+		}
 	}
 
 	/*
 	 * This function should also ensure all READ and UPDATE operation
 	 * get QUORUM replies
 	 */
+	for (iter = transSet.begin(); iter != transSet.end(); ++iter)
+	{
+		map<int, Message>::iterator search = opSet.find(iter->first);
+		if (search == opSet.end()) {
+			// not found?
+			continue;
+		}
+		Message * msg = &(search->second);
+		if (iter->second < 2) {
+			switch (msg->type)
+			{
+			case CREATE:
+				log->logCreateFail(&memberNode->addr, true, msg->transID, msg->key, msg->value);
+				break;
+
+			case UPDATE:
+				log->logUpdateFail(&memberNode->addr, true, msg->transID, msg->key, msg->value);
+				break;
+
+			case READ:
+				log->logReadFail(&memberNode->addr, true, msg->transID, msg->key);
+				break;
+
+			case DELETE:
+				log->logDeleteFail(&memberNode->addr, true, msg->transID, msg->key);
+				break;
+			
+			default:
+				break;
+			}
+		} else {
+			switch (msg->type)
+			{
+			case CREATE:
+				log->logCreateSuccess(&memberNode->addr, true, msg->transID, msg->key, msg->value);
+				break;
+
+			case UPDATE:
+				log->logUpdateSuccess(&memberNode->addr, true, msg->transID, msg->key, msg->value);
+				break;
+
+			case READ: // already logged
+				break;
+
+			case DELETE:
+				log->logDeleteSuccess(&memberNode->addr, true, msg->transID, msg->key);
+				break;
+			
+			default:
+				break;
+			}
+		}
+		opSet.erase(iter->first);
+	}
+	
 }
 
 /**
@@ -328,4 +534,5 @@ void MP2Node::stabilizationProtocol() {
 	/*
 	 * Implement this
 	 */
+
 }

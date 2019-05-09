@@ -47,6 +47,8 @@ private:
 	EmulNet * emulNet;
 	// Object of Log
 	Log * log;
+	// op log
+	map<int, Message> opSet;
 
 public:
 	MP2Node(Member *memberNode, Params *par, EmulNet *emulNet, Log *log, Address *addressOfMember);
